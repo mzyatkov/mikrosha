@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <linux/rtc.h>
+#include <fcntl.h>
 
 #include <iostream>
 #include <algorithm>
@@ -16,7 +17,7 @@
 #include <vector>
 #include <fstream>
 #include <cassert>
-
+#include <iomanip>
 using namespace std;
 
 #define HOME_PATH getenv("HOME")
@@ -52,11 +53,12 @@ class Command
 public:
     string command_line;
     vector<string> all_args;
-    int fd[2][2]; //file descriptor for input/output in conveyer
+    vector<string> command, files_out, files_in; // "command < file1 > file2", command empty if not redirection
     Command(const string &input)
     {
-        this->command_line = input;
-        this->split_line();
+        command_line = input;
+        split_line();
+        split_redir();
     }
     ~Command() {}
     void print()
@@ -67,7 +69,8 @@ public:
         }
         cout << endl;
     }
-    bool is_empty() {
+    bool is_empty()
+    {
         return all_args.empty();
     }
     bool is_cd()
@@ -82,14 +85,23 @@ public:
     {
         return is_empty() ? false : all_args[0] == "pwd";
     }
-    void delete_time() {
-        if(is_time()) {
-            all_args.erase(all_args.begin());
+    bool is_redir()
+    {
+        return !command.empty();
+    }
+    void delete_time()
+    {
+        if (is_time())
+        {
+            this->all_args.erase(all_args.begin());
         }
         return;
     }
     int exec_command()
     {
+        if (is_redir()) {
+            
+        }
         if (is_empty())
         {
             perror("is_empty");
@@ -167,12 +179,48 @@ private:
             cerr << "No such file or directory" << endl;
         }
     }
+    void expand_reg_expr()
+    {
+        return;
+    }
+    //split args on command, input_file and output_file
+    void split_redir()
+    {
+        auto less_it = find(all_args.begin(), all_args.end(), "<");
+        auto more_it = find(all_args.begin(), all_args.end(), ">");
+        if (less_it < more_it)
+        {
+            command.assign(all_args.begin(), less_it);
+        }
+        else if (less_it > more_it)
+        {
+            command.assign(all_args.begin(), more_it);
+        }
+        else
+        {
+            return;
+        }
+        while (less_it != all_args.end() || more_it != all_args.end())
+        {
+            if (less_it < all_args.end() - 1)
+            {
+                files_in.push_back(*(less_it + 1));
+            }
+            if (more_it < all_args.end() - 1)
+            {
+                files_out.push_back(*(more_it + 1));
+            }
+            less_it = find(less_it, all_args.end(), "<");
+            more_it = find(more_it, all_args.end(), ">");
+        }
+        return;
+    }
 };
 void print_enter_line()
 {
     uid_t euid = geteuid();
     char *dir;
-    cout << euid << " :asdfasfd" << endl;
+    //cout << euid << " :asdfasfd" << endl;
     if (euid == 0)
     {
         cout << get_dir() << "!";
@@ -182,11 +230,27 @@ void print_enter_line()
         cout << get_dir() << ">";
     }
 }
-int exec_conveyer(vector<Command> commands)
+int exec_conveyer(vector<Command> &commands)
 {
-    int fd[2][2];
     if (commands.empty() || commands[0].is_empty())
     {
+        return 0;
+    }
+    if (commands[0].is_time())
+    {
+        struct rusage usage;
+        struct timeval start_real_time, stop_real_time;
+        gettimeofday(&start_real_time, NULL);
+        ////////
+        commands[0].delete_time();
+        exec_conveyer(commands);
+        gettimeofday(&stop_real_time, NULL);
+        getrusage(RUSAGE_CHILDREN, &usage);
+        auto real_time_sec = difftime(stop_real_time.tv_sec, start_real_time.tv_sec);
+        auto real_time_usec = difftime(stop_real_time.tv_usec, start_real_time.tv_usec);
+        cerr << "real: " << real_time_sec << "." << setfill('0') << setw(3) << real_time_usec << endl
+             << "system: " << usage.ru_stime.tv_sec << "." << setfill('0') << setw(3) << usage.ru_stime.tv_usec << endl
+             << "user: " << usage.ru_utime.tv_sec << "." << setfill('0') << setw(3) << usage.ru_utime.tv_usec << endl;
         return 0;
     }
     if (commands.size() == 1)
@@ -194,27 +258,6 @@ int exec_conveyer(vector<Command> commands)
         if (commands[0].is_cd())
         {
             commands[0].exec_command();
-            return 0;
-        }
-        if (commands[0].is_time())
-        {
-            struct rusage usage;
-            auto start = time(NULL);
-            getrusage(RUSAGE_CHILDREN, &usage);
-            auto start_user_time = usage.ru_utime.tv_sec;
-            auto start_sys_time = usage.ru_stime.tv_sec;
-            ////////
-            commands[0].delete_time();
-            exec_conveyer(commands);
-            ////////
-            auto stop = time(NULL);
-            getrusage(RUSAGE_CHILDREN, &usage);
-            double user_time = difftime(usage.ru_utime.tv_sec ,user_time);
-            double sys_time = difftime(usage.ru_stime.tv_sec, sys_time);
-            double real_time = difftime(stop, start);
-            cerr << "real: "<< real_time << endl 
-            << "system: " << sys_time << endl
-            << "user: " << user_time << endl;
             return 0;
         }
         if (fork() == 0)
@@ -228,18 +271,19 @@ int exec_conveyer(vector<Command> commands)
     }
     else
     {
-        vector<int[2]> pipes(commands.size());
+        vector<int[2]> pipes(commands.size() - 1);
         int cur_fd = 0, prev_fd = -1;
         for (auto &fd : pipes)
         {
-            if (pipe(fd) != 0)
+            if (pipe2(fd, O_CLOEXEC) != 0)
             {
                 perror("pipe\n");
             }
         }
         for (int i = 0; i < commands.size(); i++, cur_fd++, prev_fd++)
         {
-            if (fork() == 0)
+            pid_t pid = fork();
+            if (pid == 0)
             {
                 if (i == 0)
                 {
@@ -264,81 +308,20 @@ int exec_conveyer(vector<Command> commands)
             }
             else
             {
-                wait(nullptr);
+                if (i == commands.size() - 1)
+                {
+                    for (auto &i : pipes)
+                    {
+                        close(i[0]);
+                        close(i[1]);
+                    }
+                    for (int i = 0; i < commands.size(); i++)
+                    {
+                        wait(NULL);
+                    }
+                }
             }
         }
-        for (auto &pipe : pipes)
-        {
-            close(pipe[0]);
-            close(pipe[1]);
-        }
-        // if (fork() == 0)
-        // {
-        //     if (commands.size() == 2)
-        //     {
-        //         dup2(fd[1], STDOUT_FILENO);
-        //         close(fd[0]);
-        //         commands[0].exec_command();
-        //     }
-
-        // for (int i = 1; i < commands.size(); i++)
-        // {
-        //     pipe(fd[i % 2]);
-        //     pid_t pid = fork();
-        //     if (pid != 0)
-        //     { // parent?
-        //         close(fd[i % 2][0]);
-        //         dup2(fd[i % 2][1], STDOUT_FILENO);
-        //         commands[i].exec_command();
-        //     }
-        //     else
-        //     {
-        //         close(fd[i % 2][1]);
-        //         dup2(fd[i % 2][0], STDIN_FILENO);
-        //         commands[i + 1].exec_command();
-        //     }
-        //     wait(nullptr);
-        //     close(fd[0][0]);
-        //     close(fd[0][1]);
-        // }
-
-        // int cur_fd = 0;
-        // for (int i = 0; i < commands.size(); i++)
-        // {
-
-        //     pipe(fd[cur_fd]);
-        //     if (fork() == 0)
-        //     {
-        //         if (fork() == 0)
-        //         {
-        //             dup2(fd[cur_fd][1], STDOUT_FILENO);
-        //             close(fd[cur_fd][0]);
-
-        //             commands[i].exec_command();
-        //             cerr << "executed0..." << endl;
-        //             exit(0);
-        //         }
-        //         else
-        //         {
-        //             wait(nullptr);
-        //             cout << "executed1..." << endl;
-
-        //             dup2(fd[cur_fd][0], STDIN_FILENO);
-        //             close(fd[cur_fd][1]);
-
-        //             cout << "waiting..." << endl;
-        //             wait(nullptr);
-        //             cout << "executing..." << endl;
-        //             commands[i + 1].exec_command();
-        //             cout << "executed..." << endl;
-        //             exit(0);
-        //         }
-        //     }
-        //     else
-        //     {
-        //         wait(nullptr);
-        //     }
-        // }
     }
     return 0;
 }
