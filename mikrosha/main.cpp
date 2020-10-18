@@ -10,10 +10,12 @@
 #include <sys/resource.h>
 #include <linux/rtc.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #include <iostream>
 #include <algorithm>
 #include <string>
+#include <cstring>
 #include <vector>
 #include <fstream>
 #include <cassert>
@@ -31,29 +33,13 @@ string get_dir()
     return str;
 }
 
-vector<string> split_conveyer(const string &command_line)
-{
-    vector<string> splitted_conveyer;
-    auto first = command_line.begin();
-    while (first != command_line.end())
-    {
-        first = find_if_not(first, command_line.end(), [](auto c) { return (c == '|') ? true : false; });
-        auto last = find_if(first, command_line.end(), [](auto c) { return (c == '|') ? true : false; });
-        if (first != command_line.end())
-        {
-            splitted_conveyer.push_back(string(first, last));
-            first = last;
-        }
-    }
-    return splitted_conveyer;
-}
-
 class Command
 {
 public:
     string command_line;
     vector<string> all_args;
-    vector<string> command, files_out, files_in; // "command < file1 > file2", command empty if not redirection
+    vector<string> command_args;      // "command < file1 > file2", command empty in case no redirection
+    vector<pair<string, bool>> files; //file args: 0 - if input, 1 - if output
     Command(const string &input)
     {
         command_line = input;
@@ -73,6 +59,10 @@ public:
     {
         return all_args.empty();
     }
+    bool is_redir()
+    {
+        return isredir;
+    }
     bool is_cd()
     {
         return is_empty() ? false : all_args[0] == "cd";
@@ -85,10 +75,6 @@ public:
     {
         return is_empty() ? false : all_args[0] == "pwd";
     }
-    bool is_redir()
-    {
-        return !command.empty();
-    }
     void delete_time()
     {
         if (is_time())
@@ -99,8 +85,45 @@ public:
     }
     int exec_command()
     {
-        if (is_redir()) {
-            
+        if (isredir)
+        {
+            bool input_exists=false, output_exists=false;
+            char input_name[256], output_name[256];
+            for (int i = files.size()-1; i>=0; i--) {
+                if (files[i].second == 0 && !input_exists) {
+                    input_exists = true;
+                    strncpy(input_name, files[i].first.c_str(), 255);
+                }else if(files[i].second == 1 && !output_exists) {
+                    output_exists = true;
+                    strncpy(output_name, files[i].first.c_str(), 255);
+                }
+            }
+            int fout = -1, fin = -1; //maybe don't close (i dont know)
+            if (output_exists)
+            {
+                fout = open(output_name, O_WRONLY | O_TRUNC | O_CREAT | O_CLOEXEC, S_IREAD|S_IWRITE);
+                if (fout == -1) {perror("open output file failed"); return 1;}
+                dup2(fout, STDOUT_FILENO);
+            }
+            if (input_exists)
+            {
+               fin = open(output_name, O_RDONLY | O_CLOEXEC);
+               if (fin == -1) {perror("open input file failed"); return 1;}
+                dup2(fin, STDIN_FILENO);
+
+            }
+            isredir = false; //after processing consider it simple command
+            if (fork() == 0)
+            {
+                exec_command();
+            }
+            else
+            {
+                wait(nullptr);
+                close(fout);
+                close(fin);
+            }
+            return 0;
         }
         if (is_empty())
         {
@@ -109,17 +132,17 @@ public:
         }
         if (is_cd())
         {
-            if (all_args.size() == 1)
+            if (command_args.size() == 1)
             {
                 exec_cd(HOME_PATH);
             }
-            else if (all_args.size() == 2)
+            else if (command_args.size() == 2)
             {
-                exec_cd(all_args[1]);
+                exec_cd(command_args[1]);
             }
             else
             {
-                for (auto &i : all_args)
+                for (auto &i : command_args)
                 {
                     cout << i << endl;
                 }
@@ -132,12 +155,13 @@ public:
         }
         else
         {
-            exec_bash_command(all_args);
+            exec_bash_command(command_args);
         }
         return 0;
     }
 
 private:
+    bool isredir = true;
     void split_line()
     {
         auto first = command_line.begin();
@@ -183,32 +207,42 @@ private:
     {
         return;
     }
-    //split args on command, input_file and output_file
+    //split args on {command}, {input_files} and {output_files}
     void split_redir()
     {
         auto less_it = find(all_args.begin(), all_args.end(), "<");
         auto more_it = find(all_args.begin(), all_args.end(), ">");
         if (less_it < more_it)
         {
-            command.assign(all_args.begin(), less_it);
+            command_args.assign(all_args.begin(), less_it);
         }
         else if (less_it > more_it)
         {
-            command.assign(all_args.begin(), more_it);
+            command_args.assign(all_args.begin(), more_it);
         }
         else
         {
+            command_args = all_args;
+            isredir = false;
             return;
         }
         while (less_it != all_args.end() || more_it != all_args.end())
         {
             if (less_it < all_args.end() - 1)
             {
-                files_in.push_back(*(less_it + 1));
+                files.push_back(make_pair(*(less_it + 1), 0));
             }
             if (more_it < all_args.end() - 1)
             {
-                files_out.push_back(*(more_it + 1));
+                files.push_back(make_pair(*(more_it + 1), 1));
+            }
+            if (less_it != all_args.end())
+            {
+                less_it++;
+            }
+            if (more_it != all_args.end())
+            {
+                more_it++;
             }
             less_it = find(less_it, all_args.end(), "<");
             more_it = find(more_it, all_args.end(), ">");
@@ -216,6 +250,23 @@ private:
         return;
     }
 };
+
+vector<string> split_conveyer(const string &command_line)
+{
+    vector<string> splitted_conveyer;
+    auto first = command_line.begin();
+    while (first != command_line.end())
+    {
+        first = find_if_not(first, command_line.end(), [](auto c) { return (c == '|') ? true : false; });
+        auto last = find_if(first, command_line.end(), [](auto c) { return (c == '|') ? true : false; });
+        if (first != command_line.end())
+        {
+            splitted_conveyer.push_back(string(first, last));
+            first = last;
+        }
+    }
+    return splitted_conveyer;
+}
 void print_enter_line()
 {
     uid_t euid = geteuid();
@@ -236,6 +287,8 @@ int exec_conveyer(vector<Command> &commands)
     {
         return 0;
     }
+    int stored_stdin = dup(STDIN_FILENO);
+    int stored_stdout = dup(STDOUT_FILENO);
     if (commands[0].is_time())
     {
         struct rusage usage;
@@ -251,16 +304,18 @@ int exec_conveyer(vector<Command> &commands)
         cerr << "real: " << real_time_sec << "." << setfill('0') << setw(3) << real_time_usec << endl
              << "system: " << usage.ru_stime.tv_sec << "." << setfill('0') << setw(3) << usage.ru_stime.tv_usec << endl
              << "user: " << usage.ru_utime.tv_sec << "." << setfill('0') << setw(3) << usage.ru_utime.tv_usec << endl;
-        return 0;
-    }
-    if (commands.size() == 1)
+    } else if (commands.size() == 1)
     {
         if (commands[0].is_cd())
         {
             commands[0].exec_command();
             return 0;
         }
-        if (fork() == 0)
+        if (commands[0].is_redir())
+        {
+            commands[0].exec_command(); // in this case fork will be inside
+        }
+        else if (fork() == 0)
         {
             commands[0].exec_command();
         }
@@ -323,6 +378,8 @@ int exec_conveyer(vector<Command> &commands)
             }
         }
     }
+     dup2(stored_stdin, STDIN_FILENO);
+     dup2(stored_stdout, STDOUT_FILENO);
     return 0;
 }
 
