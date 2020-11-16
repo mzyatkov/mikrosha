@@ -85,6 +85,7 @@ public:
   bool is_cd() { return is_empty() ? false : command_args[0] == "cd"; }
   bool is_time() { return is_empty() ? false : command_args[0] == "time"; }
   bool is_pwd() { return is_empty() ? false : command_args[0] == "pwd"; }
+  bool is_set() { return is_empty() ? false : command_args[0] == "set"; }
   void delete_time() {
     if (is_time()) {
       command_args.erase(command_args.begin());
@@ -112,6 +113,10 @@ public:
       }
     } else if (is_pwd()) {
       exec_pwd();
+    } else if (is_set()) {
+      for (int i = 0; environ[i] != 0; i++) {
+        cout << environ[i]  << endl;
+      }
     } else {
       exec_bash_command(command_args);
     }
@@ -384,6 +389,10 @@ public:
       commands[0].exec_command();
       return 0;
     }
+    if (commands[0].is_set()) {
+      commands[0].exec_command();
+      return 0;
+    }
     int cur_fd = 0, prev_fd = -1;
     vector<int[2]> pipes(commands.size() - 1);
     for (auto &fd : pipes) {
@@ -449,7 +458,7 @@ void sig_handler(int signal) {
     flag = 1;
   }
 }
-int main() {
+int main(int argc, char **argv, char** envp) {
   while (true) {
     flag = 0;
     signal(SIGINT, sig_handler);
