@@ -94,7 +94,7 @@ public:
   }
   int exec_command() {
     if(dont_executable) {
-      return 0;
+      exit(1);
     }
     if (is_empty()) {
       perror("is_empty");
