@@ -67,7 +67,7 @@ public:
   vector<string> command_args;      // "command < file1 > file2", command empty
                                     //  in case no redirection
   vector<pair<string, bool>> files; // file args: 0 - if input, 1 - if output
-  int fd_in = -1, fd_out = -1;
+  vector<int> files_fds; //store file descriptors of all files
   Command(const string &input) {
     split_line(input);
     split_redir();
@@ -93,7 +93,7 @@ public:
     return;
   }
   int exec_command() {
-    if(dont_executable) {
+    if (dont_executable) {
       exit(1);
     }
     if (is_empty()) {
@@ -115,7 +115,7 @@ public:
       exec_pwd();
     } else if (is_set()) {
       for (int i = 0; environ[i] != 0; i++) {
-        cout << environ[i]  << endl;
+        cout << environ[i] << endl;
       }
     } else {
       exec_bash_command(command_args);
@@ -127,36 +127,30 @@ public:
     if (!is_redir()) {
       return 0;
     }
-    bool input_exists = false, output_exists = false;
-    string input_name, output_name;
-    for (int i = files.size() - 1; i >= 0; i--) {
-      if (files[i].second == 0 && !input_exists) {
-        input_exists = true;
-        input_name = files[i].first;
-      } else if (files[i].second == 1 && !output_exists) {
-        output_exists = true;
-        output_name = files[i].first;
+    for (int i = 0; i < files.size(); i++) {
+      int fd_out = -1, fd_in = -1;
+      if (files[i].second == 1) {
+        fd_out = open(files[i].first.c_str(), O_WRONLY | O_TRUNC | O_CREAT, 0644);
+        files_fds[i] = fd_out;//restore fd of opened file or -1 else
+        if (fd_out == -1) {
+          perror("open output file failed");
+          dont_executable = true;
+          return 1;
+        }
+        dup2(fd_out, STDOUT_FILENO);
+      }
+      if (files[i].second == 0) {
+        fd_in = open(files[i].first.c_str(), O_RDONLY);
+        files_fds[i] = fd_in;//restore fd of opened file or -1 else
+        if (fd_in == -1) {
+          perror("open input file failed");
+          dont_executable = true;
+          return 1;
+        }
+        dup2(fd_in, STDIN_FILENO);
       }
     }
-    fd_out = -1, fd_in = -1;
-    if (output_exists) {
-      fd_out = open(output_name.c_str(), O_WRONLY | O_TRUNC | O_CREAT, 0644);
-      if (fd_out == -1) {
-        perror("open output file failed");
-        dont_executable = true;
-        return 1;
-      }
-      dup2(fd_out, STDOUT_FILENO);
-    }
-    if (input_exists) {
-      fd_in = open(input_name.c_str(), O_RDONLY);
-      if (fd_in == -1) {
-        perror("open input file failed");
-        dont_executable = true;
-        return 1;
-      }
-      dup2(fd_in, STDIN_FILENO);
-    }
+
     return 0;
   }
 
@@ -323,9 +317,11 @@ private:
     while (less_it != all_args.end() || more_it != all_args.end()) {
       if (less_it < all_args.end() - 1) {
         files.push_back(make_pair(*(less_it + 1), 0));
+        files_fds.push_back(-1);
       }
       if (more_it < all_args.end() - 1) {
         files.push_back(make_pair(*(more_it + 1), 1));
+        files_fds.push_back(-1);
       }
       if (less_it != all_args.end()) {
         less_it++;
@@ -435,13 +431,10 @@ public:
           //в конце закрываем трубы в родителе и ждем всех детей//
         }
         // close if opened
-        if (commands[i].fd_in != -1) {
-          close(commands[i].fd_in);
-          commands[i].fd_in = -1;
-        }
-        if (commands[i].fd_out != -1) {
-          close(commands[i].fd_out);
-          commands[i].fd_out = -1;
+        for (auto &fd : commands[i].files_fds) {
+          if (fd != -1) {
+            close(fd);
+          }
         }
       }
     }
@@ -458,7 +451,7 @@ void sig_handler(int signal) {
     flag = 1;
   }
 }
-int main(int argc, char **argv, char** envp) {
+int main(int argc, char **argv, char **envp) {
   while (true) {
     flag = 0;
     signal(SIGINT, sig_handler);
