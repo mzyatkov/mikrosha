@@ -1,4 +1,3 @@
-#include <bits/types/sig_atomic_t.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -73,13 +72,7 @@ public:
     split_redir();
     expand_reg_expr_all(command_args);
   }
-  ~Command() {}
-  void print() {
-    for (auto &i : all_args) {
-      cout << cout.width(2) << i;
-    }
-    cout << endl;
-  }
+  ~Command() {} 
   bool is_empty() { return command_args.empty(); }
   bool is_redir() { return isredir; }
   bool is_cd() { return is_empty() ? false : command_args[0] == "cd"; }
@@ -275,32 +268,32 @@ private:
     }
     return result;
   }
-  bool match_reg_expr(string word_str, string expr_str) {
-    const char *expr = expr_str.c_str();
-    const char *word = word_str.c_str();
-    const char *prev_word = 0, *prev_expr;
-    while (1) {
-      if (*expr == '*') {
-        prev_word =
-            word; //указывает на часть слова, которую уже поглотила звезда
-        prev_expr = ++expr; //указывает на последнюю рассматриваемую
-                            //звезду(на символ после нее)
-      } else if (!*word) {
-        return !*expr;
-      } else if (*word == *expr ||
-                 *expr == '?') { //сдвигаем указатели, если найдено совпадение
-        ++word;
-        ++expr;
-      } else if (prev_word) { //если произошла неудача - поглащаем еще один
-                              //символ
-        word = ++prev_word;
-        expr = prev_expr;
-      } else { //если звезда произошла неудача, и при этом звезда поглотила все
-               //слово
-        return false;
+    bool match_reg_expr(string word_str, string expr_str) {
+      const char *expr = expr_str.c_str();
+      const char *word = word_str.c_str();
+      const char *prev_word = 0, *prev_expr;
+      while (1) {
+        if (*expr == '*') {
+          prev_word =
+              word; //указывает на часть слова, которую уже поглотила звезда
+          prev_expr = ++expr; //указывает на последнюю рассматриваемую
+                              //звезду(на символ после нее)
+        } else if (!*word) {
+          return !*expr;
+        } else if (*word == *expr ||
+                  *expr == '?') { //сдвигаем указатели, если найдено совпадение
+          ++word;
+          ++expr;
+        } else if (prev_word) { //если произошла неудача - поглащаем еще один
+                                //символ
+          word = ++prev_word;
+          expr = prev_expr;
+        } else { //если звезда произошла неудача, и при этом звезда поглотила все
+                //слово
+          return false;
+        }
       }
     }
-  }
   // split args into {command}, {input_files} and {output_files}
   void split_redir() {
     auto less_it = find(all_args.begin(), all_args.end(), "<");
@@ -445,24 +438,21 @@ private:
   int stored_stdin, stored_stdout;
 };
 
-sig_atomic_t flag = 0;
 void sig_handler(int signal) {
-  if (signal == 2) {
-    flag = 1;
+  if (signal == SIGINT || signal == SIGTSTP) {
+    cout << endl;
   }
 }
+
 int main(int argc, char **argv, char **envp) {
+  signal(SIGINT, sig_handler);
+  signal(SIGTSTP, sig_handler);
   while (true) {
-    flag = 0;
-    signal(SIGINT, sig_handler);
     print_enter_line();
     try {
       string input;
       if (!getline(cin, input)) {
         throw string("EOF");
-      }
-      if (flag) {
-        continue;
       }
       Conveyer conveyer(input);
       conveyer.exec_conveyer();
