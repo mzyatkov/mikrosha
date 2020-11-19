@@ -1,12 +1,10 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <linux/rtc.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -173,7 +171,7 @@ private:
       v.push_back((char *)args[i].c_str());
     }
     v.push_back(NULL);
-    prctl(PR_SET_PDEATHSIG, SIGINT); // exit process when parent dies
+    //prctl(PR_SET_PDEATHSIG, SIGINT); // exit process when parent dies
     execvp(v[0], &v[0]);
     cerr << "Execution error" << endl;
     exit(1);
