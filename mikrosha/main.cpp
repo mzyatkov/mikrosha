@@ -438,6 +438,7 @@ private:
 void sig_handler(int signal) {
   if (signal == SIGINT || signal == SIGTSTP) {
     cout << endl;
+    SIG_IGN(signal);
   }
 }
 
