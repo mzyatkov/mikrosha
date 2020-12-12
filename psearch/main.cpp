@@ -44,7 +44,7 @@ class Task {
     }
 };
 
-void file_search(string *path, string *pattern) {
+void file_search(string *path, string *pattern, mutex *output_guard) {
 
     ifstream fin(*path);
     if (fin)
@@ -53,7 +53,9 @@ void file_search(string *path, string *pattern) {
         for (int i=0; getline(fin, str); i++) 
         {
             if (str.find(*pattern)!=str.npos) {
+                output_guard->lock();
                 printf("file: %s str_num: %d str: %s\n", path->c_str(), i, str.c_str());
+                output_guard->unlock();
             }
         }
     }
@@ -105,6 +107,7 @@ int main(int argc, char **argv) {
     }
     ///////////////////////////////////
     Task task(dir_name, search_in_one_dir);
+    mutex output_guard;
     vector<thread> threads(thread_num);
     int ptr = 0;
     vector<string> targets(thread_num);
@@ -112,7 +115,7 @@ int main(int argc, char **argv) {
         while ((!task.task_pool.empty() && ptr!=thread_num)){
             targets[ptr] = task.task_pool[0];
             task.task_pool.erase(task.task_pool.begin());
-            threads[ptr] = thread(file_search, &targets[ptr], &pattern);
+            threads[ptr] = thread(file_search, &targets[ptr], &pattern, &output_guard);
             ptr++;
         }
         if (ptr == thread_num) {
