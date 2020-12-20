@@ -9,9 +9,11 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <queue>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -20,7 +22,7 @@ using namespace std;
 
 class Task {
    public:
-    vector<string> task_pool;
+    queue<string> task_pool;
     mutex task_guard;
     bool ls_done = false;
     Task(string path, bool in_one_dir) {
@@ -36,7 +38,7 @@ class Task {
                 ls(path + string("/") + d->d_name, true);
             } else if (d->d_type == DT_REG) {
                 task_guard.lock();
-                task_pool.push_back(path + "/" + d->d_name);
+                task_pool.push(path + "/" + d->d_name);
                 task_guard.unlock();
             }
         }
@@ -44,24 +46,51 @@ class Task {
     }
 };
 
-void file_search(string *path, string *pattern, mutex *output_guard) {
+int KMP(const string &input, const string &pattern) {
+    vector<int> prefunc(pattern.length());
 
+    prefunc[0] = 0;
+    for (int k = 0, i = 1; i < pattern.length(); ++i) {
+        while ((k > 0) && (pattern[i] != pattern[k]))
+            k = prefunc[k - 1];
+
+        if (pattern[i] == pattern[k])
+            k++;
+
+        prefunc[i] = k;
+    }
+
+    for (int k = 0, i = 0; i < input.length(); ++i) {
+        while ((k > 0) && (pattern[k] != input[i])) {
+            k = prefunc[k - 1];
+        }
+        if (pattern[k] == input[i]) {
+            k++;
+        }
+        if (k == pattern.length()) {
+            return (i - pattern.length() + 1);  //первое вхождение
+        }
+    }
+
+    return -1;
+}
+
+void file_search(string *path, string *pattern, mutex *output_guard) {
     ifstream fin(*path);
-    if (fin)
-    {
+    if (fin) {
         string str;
-        for (int i=0; getline(fin, str); i++) 
-        {
-            if (str.find(*pattern)!=str.npos) {
+        for (int i = 0; getline(fin, str); i++) {
+            int ptr;
+            if ((ptr = KMP(str, *pattern)) != -1) {
                 output_guard->lock();
                 printf("file: %s str_num: %d str: %s\n", path->c_str(), i, str.c_str());
                 output_guard->unlock();
             }
         }
+    } else {
+        //cout << "No such file" << endl;
     }
-    else {
-        cout << "No such file" << endl;
-    }
+    return;
 }
 
 string get_dir() {
@@ -106,15 +135,20 @@ int main(int argc, char **argv) {
         exit(1);
     }
     ///////////////////////////////////
+    pattern = "\1";
+
     Task task(dir_name, search_in_one_dir);
     mutex output_guard;
     vector<thread> threads(thread_num);
     int ptr = 0;
     vector<string> targets(thread_num);
     do {
-        while ((!task.task_pool.empty() && ptr!=thread_num)){
-            targets[ptr] = task.task_pool[0];
-            task.task_pool.erase(task.task_pool.begin());
+        while ((!task.task_pool.empty() && ptr != thread_num)) {
+            task.task_guard.lock();
+            targets[ptr] = task.task_pool.front();
+            task.task_pool.pop();
+            task.task_guard.unlock();
+            
             threads[ptr] = thread(file_search, &targets[ptr], &pattern, &output_guard);
             ptr++;
         }
