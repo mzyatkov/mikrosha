@@ -135,7 +135,6 @@ int main(int argc, char **argv) {
         exit(1);
     }
     ///////////////////////////////////
-    pattern = "\1";
 
     Task task(dir_name, search_in_one_dir);
     mutex output_guard;
